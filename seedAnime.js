@@ -1,10 +1,12 @@
+// seedAnime.js
 import mongoose from "mongoose";
 import dotenv from "dotenv";
-import Anime from "./models/Anime.js"; // adjust path if needed
+import Anime from "./models/Anime.js";
 
 dotenv.config();
 
-const MONGO_URI = process.env.MONGO_URI;
+// Try multiple env var names for compatibility
+const MONGO_URI = process.env.MONGODB_URI || process.env.MONGO_URI || process.env.MONGOURL || "";
 
 const animeData = [
   {
@@ -15,7 +17,8 @@ const animeData = [
       url: `https://streaming-url.com/naruto-ep${i + 1}`
     })),
     status: "completed",
-    trending: true
+    trending: true,
+    popularity: 100
   },
   {
     title: "Naruto Shippuden",
@@ -25,7 +28,8 @@ const animeData = [
       url: `https://streaming-url.com/narutoshippuden-ep${i + 1}`
     })),
     status: "completed",
-    trending: true
+    trending: true,
+    popularity: 98
   },
   {
     title: "One Piece",
@@ -35,7 +39,8 @@ const animeData = [
       url: `https://streaming-url.com/onepiece-ep${i + 1}`
     })),
     status: "ongoing",
-    trending: true
+    trending: true,
+    popularity: 99
   },
   {
     title: "Attack on Titan",
@@ -45,7 +50,8 @@ const animeData = [
       url: `https://streaming-url.com/aot-ep${i + 1}`
     })),
     status: "completed",
-    trending: true
+    trending: true,
+    popularity: 95
   },
   {
     title: "Demon Slayer",
@@ -55,7 +61,8 @@ const animeData = [
       url: `https://streaming-url.com/demonslayer-ep${i + 1}`
     })),
     status: "ongoing",
-    trending: true
+    trending: true,
+    popularity: 92
   },
   {
     title: "My Hero Academia",
@@ -65,7 +72,8 @@ const animeData = [
       url: `https://streaming-url.com/mha-ep${i + 1}`
     })),
     status: "ongoing",
-    trending: true
+    trending: true,
+    popularity: 90
   },
   {
     title: "Tokyo Revengers",
@@ -75,7 +83,8 @@ const animeData = [
       url: `https://streaming-url.com/tokyorevengers-ep${i + 1}`
     })),
     status: "ongoing",
-    trending: true
+    trending: true,
+    popularity: 85
   },
   {
     title: "Bleach",
@@ -85,7 +94,8 @@ const animeData = [
       url: `https://streaming-url.com/bleach-ep${i + 1}`
     })),
     status: "completed",
-    trending: false
+    trending: false,
+    popularity: 80
   },
   {
     title: "Fullmetal Alchemist: Brotherhood",
@@ -95,7 +105,8 @@ const animeData = [
       url: `https://streaming-url.com/fma-brotherhood-ep${i + 1}`
     })),
     status: "completed",
-    trending: true
+    trending: true,
+    popularity: 96
   },
   {
     title: "Jujutsu Kaisen",
@@ -105,12 +116,12 @@ const animeData = [
       url: `https://streaming-url.com/jujutsukaisen-ep${i + 1}`
     })),
     status: "ongoing",
-    trending: true
+    trending: true,
+    popularity: 94
   },
-  // Add 40+ more anime similarly...
+  // placeholder additional anime
 ];
 
-// Example: generate dummy placeholders for additional anime
 for (let i = 1; i <= 40; i++) {
   animeData.push({
     title: `Anime ${i}`,
@@ -120,25 +131,49 @@ for (let i = 1; i <= 40; i++) {
       url: `https://streaming-url.com/anime${i}-ep${j + 1}`
     })),
     status: "ongoing",
-    trending: i % 2 === 0
+    trending: i % 2 === 0,
+    popularity: 50 + (i % 10)
   });
 }
 
 const seedDatabase = async () => {
   try {
-    await mongoose.connect(MONGO_URI, { useNewUrlParser: true, useUnifiedTopology: true });
-    console.log("Connected to MongoDB");
+    if (!MONGO_URI || typeof MONGO_URI !== "string" || MONGO_URI.trim() === "") {
+      console.error("❌ MONGO_URI / MONGODB_URI is not set or is empty.");
+      console.error("Expected one of process.env.MONGODB_URI or process.env.MONGO_URI.");
+      console.error("Set that environment variable and try again.");
+      process.exit(1);
+    }
 
-    await Anime.deleteMany({}); // Clear old data
-    console.log("Old anime data cleared");
+    // Log host for verification without printing credentials
+    try {
+      const host = new URL(MONGO_URI.replace(/^mongodb\+srv:/, "https:"));
+      console.log("Seeding DB — connecting to host:", host.hostname);
+    } catch (e) {
+      console.log("Seeding DB — connecting to Mongo (host not parsed for SRV).");
+    }
 
+    // Connect (no deprecated options)
+    await mongoose.connect(MONGO_URI, {
+      dbName: process.env.MONGO_DB_NAME || undefined
+    });
+    console.log("✅ Connected to MongoDB");
+
+    // Clear existing documents (optional)
+    await Anime.deleteMany({});
+    console.log("🧹 Cleared old anime data");
+
+    // Insert
     await Anime.insertMany(animeData);
-    console.log("Anime data inserted successfully!");
+    console.log(`✅ Inserted ${animeData.length} anime documents`);
 
-    mongoose.disconnect();
+    await mongoose.connection.close();
+    console.log("🔌 MongoDB connection closed");
+    process.exit(0);
   } catch (err) {
     console.error("Error seeding database:", err);
-    mongoose.disconnect();
+    try { await mongoose.connection.close(); } catch (e) {}
+    process.exit(1);
   }
 };
 
