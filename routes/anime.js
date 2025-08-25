@@ -1,17 +1,21 @@
 import express from 'express';
-import anigo from 'anigo-anime-api'; // package must be installed
-// If anigo exports a default that is a class, you might need: const client = new Anigo(); 
-// But this code uses the simple API used earlier: anigo.getPopular, anigo.searchGogo, etc.
+import anigo from 'anigo-anime-api'; 
+import Anime from '../models/Anime.js'; // ✅ MongoDB model
 
 const router = express.Router();
 
 /**
+ * ================================
+ * ANIGO (Scraper-based) ROUTES
+ * ================================
+ */
+
+/**
  * GET /anime/trending
- * Returns trending anime via Anigo (weekly popular)
  */
 router.get('/trending', async (req, res) => {
   try {
-    const trending = await anigo.getPopular(1); // type 1 -> weekly most viewed
+    const trending = await anigo.getPopular(1);
     res.json(trending);
   } catch (err) {
     console.error('Trending error', err);
@@ -21,16 +25,23 @@ router.get('/trending', async (req, res) => {
 
 /**
  * GET /anime/search?q=...
- * Search anime across Anigo/Gogo
+ * Search both Anigo + MongoDB
  */
 router.get('/search', async (req, res) => {
   try {
     const q = req.query.q || '';
     if (!q) return res.status(400).json({ message: 'Missing q parameter' });
 
-    const gogo = await anigo.searchGogo(q);
-    // you can combine results from other sources/scrapers later
-    res.json({ gogo });
+    // ✅ Parallel search
+    const [gogo, dbResults] = await Promise.all([
+      anigo.searchGogo(q),
+      Anime.find({ title: { $regex: q, $options: 'i' } })
+    ]);
+
+    res.json({
+      db: dbResults,
+      gogo
+    });
   } catch (err) {
     console.error('Search error', err);
     res.status(500).json({ message: 'Search failed', error: err.message });
@@ -39,8 +50,6 @@ router.get('/search', async (req, res) => {
 
 /**
  * GET /anime/episodes/:source/:slug
- * Return episode list for anime slug from supported sources.
- * Currently supports 'gogo' (via Anigo). Other sources can be added.
  */
 router.get('/episodes/:source/:slug', async (req, res) => {
   try {
@@ -49,12 +58,10 @@ router.get('/episodes/:source/:slug', async (req, res) => {
     if (!slug) return res.status(400).json({ message: 'Missing slug' });
 
     if (source === 'gogo' || source === 'gogoanime') {
-      // Anigo exposes getGogoAnimeInfo (used earlier); adapt if package differs
       const info = await anigo.getGogoAnimeInfo(slug);
       return res.json(info.episodes || []);
     }
 
-    // Add other source handlers (animepahe, 9anime).
     return res.status(400).json({ message: 'Unsupported source' });
   } catch (err) {
     console.error('Get episodes error', err);
@@ -64,7 +71,6 @@ router.get('/episodes/:source/:slug', async (req, res) => {
 
 /**
  * GET /anime/episode-sources/:source/:slug/:episodeNumber
- * Return streaming sources for an episode.
  */
 router.get('/episode-sources/:source/:slug/:episodeNumber', async (req, res) => {
   try {
@@ -73,7 +79,6 @@ router.get('/episode-sources/:source/:slug/:episodeNumber', async (req, res) => 
     if (!slug || !episodeNumber) return res.status(400).json({ message: 'Missing parameters' });
 
     if (source === 'gogo' || source === 'gogoanime') {
-      // Anigo helper to get episode sources — API may vary; adapt if needed
       const episodeId = `${slug}-episode-${episodeNumber}`;
       const sources = await anigo.getGogoanimeEpisodeSource(episodeId);
       return res.json(sources);
@@ -83,6 +88,66 @@ router.get('/episode-sources/:source/:slug/:episodeNumber', async (req, res) => 
   } catch (err) {
     console.error('Get episode sources error', err);
     res.status(500).json({ message: 'Failed to fetch episode sources', error: err.message });
+  }
+});
+
+
+/**
+ * ================================
+ * DATABASE (MongoDB) ROUTES
+ * ================================
+ */
+
+/**
+ * GET /anime/db
+ * Fetch all anime from MongoDB
+ */
+router.get('/db', async (req, res) => {
+  try {
+    const animeList = await Anime.find();
+    res.json(animeList);
+  } catch (err) {
+    res.status(500).json({ message: 'Failed to fetch anime from DB', error: err.message });
+  }
+});
+
+/**
+ * GET /anime/db/trending
+ */
+router.get('/db/trending', async (req, res) => {
+  try {
+    const trending = await Anime.find().sort({ popularity: -1 }).limit(10);
+    res.json(trending);
+  } catch (err) {
+    res.status(500).json({ message: 'Failed to fetch trending anime from DB', error: err.message });
+  }
+});
+
+/**
+ * GET /anime/db/search?q=...
+ */
+router.get('/db/search', async (req, res) => {
+  try {
+    const q = req.query.q || '';
+    if (!q) return res.status(400).json({ message: 'Missing q parameter' });
+
+    const results = await Anime.find({ title: { $regex: q, $options: 'i' } });
+    res.json(results);
+  } catch (err) {
+    res.status(500).json({ message: 'DB search failed', error: err.message });
+  }
+});
+
+/**
+ * POST /anime/db/add
+ */
+router.post('/db/add', async (req, res) => {
+  try {
+    const anime = new Anime(req.body);
+    await anime.save();
+    res.status(201).json(anime);
+  } catch (err) {
+    res.status(500).json({ message: 'Failed to add anime', error: err.message });
   }
 });
 
