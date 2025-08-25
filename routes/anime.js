@@ -1,4 +1,3 @@
-// routes/anime.js
 import express from 'express';
 import anigo from 'anigo-anime-api'; // package must be installed
 // If anigo exports a default that is a class, you might need: const client = new Anigo(); 
