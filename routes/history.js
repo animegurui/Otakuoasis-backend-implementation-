@@ -1,4 +1,3 @@
-// routes/history.js
 import express from 'express';
 import History from '../models/History.js';
 import { auth } from '../middleware/auth.js';
