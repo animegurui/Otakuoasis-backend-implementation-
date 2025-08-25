@@ -1,98 +1,131 @@
+// server.js (ES module)
+import dotenv from 'dotenv';
+dotenv.config();
+
 import express from 'express';
 import mongoose from 'mongoose';
 import IORedis from 'ioredis';
-import dotenv from 'dotenv';
 import cors from 'cors';
 import rateLimit from 'express-rate-limit';
 import winston from 'winston';
+import bcrypt from 'bcryptjs'; // using bcryptjs to avoid native compile issues
 
+// Import routes (make sure these files exist in your repo)
 import authRoutes from './routes/auth.js';
-import adminRoutes from './routes/admin.js';
-import trendingRoutes from './routes/trending.js';
-import searchRoutes from './routes/search.js';
-import episodesRoutes from './routes/episodes.js';
-import sourcesRoutes from './routes/episodeSources.js';
+import animeRoutes from './routes/anime.js';
 import historyRoutes from './routes/history.js';
+import adminRoutes from './routes/admin.js';
 
+// Import models used here
 import User from './models/User.js';
-import bcrypt from 'bcrypt';
-
-// Load environment variables
-dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// Setup logger (Winston)
+// -------------------- Logger --------------------
 const logger = winston.createLogger({
-  level: 'info',
-  format: winston.format.json(),
+  level: process.env.LOG_LEVEL || 'info',
+  format: winston.format.combine(
+    winston.format.timestamp(),
+    winston.format.printf(({ timestamp, level, message }) => `${timestamp} ${level}: ${message}`)
+  ),
   transports: [
     new winston.transports.Console(),
-    // Additional transports (e.g. file logs) can be added here
+    // new winston.transports.File({ filename: 'combined.log' }) // optional
   ],
 });
 
-// Connect to MongoDB using Mongoose
-mongoose.connect(process.env.MONGODB_URI, {
-  useNewUrlParser: true,
-  useUnifiedTopology: true,
-})
-.then(() => logger.info('Connected to MongoDB'))
-.catch(err => logger.error('MongoDB connection error:', err));
-
-// Connect to Redis
-const redisClient = new IORedis(process.env.REDIS_URL);
-redisClient.on('connect', () => logger.info('Connected to Redis'));
-redisClient.on('error', (err) => logger.error('Redis error:', err));
-
-// Create default admin user if not exists
-const createAdminUser = async () => {
-  try {
-    const existingAdmin = await User.findOne({ email: process.env.ADMIN_EMAIL });
-    if (!existingAdmin) {
-      const hashedPassword = await bcrypt.hash(process.env.ADMIN_PASSWORD, 10);
-      const adminUser = new User({
-        email: process.env.ADMIN_EMAIL,
-        password: hashedPassword,
-        role: 'admin',
-      });
-      await adminUser.save();
-      logger.info('Default admin user created');
-    }
-  } catch (error) {
-    logger.error('Error creating admin user:', error);
-  }
-};
-createAdminUser();
-
-// Middleware
+// -------------------- Middleware --------------------
 app.use(cors());
 app.use(express.json());
 
-// Rate limiting (prevent abuse; e.g. 100 requests per 15 min per IP)2
+// Basic rate limiter
 const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 100,
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: parseInt(process.env.RATE_LIMIT_MAX || '100', 10), // limit each IP
 });
 app.use(limiter);
 
-// Routes
-app.use('/auth', authRoutes);
-app.use('/admin', adminRoutes);
-app.use('/trending', trendingRoutes);
-app.use('/search', searchRoutes);
-app.use('/episodes', episodesRoutes);
-app.use('/episode-sources', sourcesRoutes);
-app.use('/history', historyRoutes);
-
-app.get('/', (req, res) => {
-  res.send('Anime streaming backend is running');
+// Simple request logging middleware
+app.use((req, res, next) => {
+  logger.info(`${req.method} ${req.originalUrl}`);
+  next();
 });
 
-// Start server
+// -------------------- MongoDB Connection --------------------
+const MONGODB_URI = process.env.MONGODB_URI || process.env.MONGO_URI || 'mongodb://localhost:27017/animeDB';
+
+mongoose
+  .connect(MONGODB_URI, { useNewUrlParser: true, useUnifiedTopology: true })
+  .then(() => {
+    logger.info('Connected to MongoDB');
+    // Create admin user if required AFTER DB connection
+    createAdminUserIfNeeded();
+  })
+  .catch(err => {
+    logger.error('MongoDB connection error: ' + err.message);
+    process.exit(1);
+  });
+
+// -------------------- Redis Connection --------------------
+const REDIS_URL = process.env.REDIS_URL || process.env.REDIS || 'redis://127.0.0.1:6379';
+export const redisClient = new IORedis(REDIS_URL);
+
+redisClient.on('connect', () => logger.info('Connected to Redis'));
+redisClient.on('error', (err) => logger.error('Redis error: ' + err.message));
+
+// -------------------- Routes --------------------
+// Prefix routes as needed. Adjust paths if your route files use different mounts.
+app.use('/auth', authRoutes);         // signup, login
+app.use('/anime', animeRoutes);       // trending, search, episodes, sources (e.g. /anime/trending)
+app.use('/history', historyRoutes);   // protected - add/get history
+app.use('/admin', adminRoutes);       // admin-only routes (should be protected in that route file)
+
+// Health-check
+app.get('/', (req, res) => res.json({ ok: true, message: 'Anime backend running' }));
+
+// -------------------- Admin user creation --------------------
+/**
+ * createAdminUserIfNeeded()
+ * - Reads ADMIN_EMAIL and ADMIN_PASSWORD from environment variables.
+ * - If provided and user does not exist, creates the admin user with role 'admin'.
+ * - Uses bcryptjs to hash the password.
+ *
+ * IMPORTANT: Do NOT put ADMIN_PASSWORD in your repo. Set it in the Render environment variables or .env (local only).
+ */
+async function createAdminUserIfNeeded() {
+  try {
+    const adminEmail = process.env.ADMIN_EMAIL;
+    const adminPassword = process.env.ADMIN_PASSWORD;
+
+    if (!adminEmail || !adminPassword) {
+      logger.info('ADMIN_EMAIL/ADMIN_PASSWORD not provided - skipping admin creation.');
+      return;
+    }
+
+    // Check if the admin user already exists
+    const existing = await User.findOne({ email: adminEmail.toLowerCase() });
+    if (existing) {
+      logger.info(`Admin user already exists: ${adminEmail}`);
+      return;
+    }
+
+    // Create the admin user
+    const hashed = await bcrypt.hash(adminPassword, 10);
+    const adminUser = new User({
+      email: adminEmail.toLowerCase(),
+      password: hashed,
+      role: 'admin',
+    });
+
+    await adminUser.save();
+    logger.info(`Created admin user: ${adminEmail}`);
+  } catch (err) {
+    logger.error('Error creating admin user: ' + (err.message || err));
+  }
+}
+
+// -------------------- Start server --------------------
 app.listen(PORT, () => {
-  logger.info(`Server running on port ${PORT}`);
+  logger.info(`Server listening on port ${PORT}`);
 });
-
-export { redisClient };
